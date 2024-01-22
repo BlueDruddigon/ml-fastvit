@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.layers import DropPath, to_ntuple, trunc_normal_
+from timm.models import register_model
 
 from .components import Attention, MobileOneBlock, ReparamLargeKernelConv
 
@@ -678,6 +679,7 @@ class FastViT(nn.Module):
         return self.head(x)
 
 
+@register_model
 def fastvit_t8(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T8 model variant."""
     depths = [2, 2, 4, 2]
@@ -697,6 +699,7 @@ def fastvit_t8(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_t12(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T12 model variant."""
     depths = [2, 2, 6, 2]
@@ -716,6 +719,7 @@ def fastvit_t12(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_s12(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-S12 model variant."""
     depths = [2, 2, 6, 2]
@@ -735,6 +739,7 @@ def fastvit_s12(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_sa12(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA12 model variant."""
     depths = [2, 2, 6, 2]
@@ -756,6 +761,7 @@ def fastvit_sa12(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_sa24(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA24 model variant."""
     depths = [4, 4, 12, 4]
@@ -777,6 +783,7 @@ def fastvit_sa24(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_sa36(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA36 model variant."""
     depths = [6, 6, 18, 6]
@@ -799,6 +806,7 @@ def fastvit_sa36(pretrained: str = '', **kwargs: Any) -> FastViT:
     return model
 
 
+@register_model
 def fastvit_ma36(pretrained: str = '', **kwargs: Any) -> FastViT:
     """Instantiate FastViT-MA36 model variant."""
     depths = [6, 6, 18, 6]
