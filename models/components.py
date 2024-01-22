@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-__all__ = ['MobileOneBlock', 'ReparamLargeKernelConv']
+__all__ = ['MobileOneBlock', 'ReparamLargeKernelConv', 'reparameterize_model']
 
 
 class SEBlock(nn.Module):
