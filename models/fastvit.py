@@ -1,4 +1,5 @@
 import os
+import warnings
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -9,6 +10,8 @@ from timm.layers import DropPath, to_ntuple, trunc_normal_
 from timm.models import register_model
 
 from .components import Attention, MobileOneBlock, ReparamLargeKernelConv
+
+warnings.filterwarnings('ignore')
 
 
 def _cfg(url: str = '', **kwargs: Any) -> Dict[str, Any]:
