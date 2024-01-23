@@ -798,13 +798,13 @@ def main():
         assert hasattr(model, 'num_classes'), 'model must have `num_classes` attribute if not set on config.'
         args.num_classes = model.num_classes  # FIXME: handle model default vs config `num_classes` more elegantly
     
-    if args.local_rank == 0:
+    if args.rank == 0:
         _logger.info(
           f'model {safe_model_name(args.model)} is created, '
           f'param count: {sum([m.numel() for m in model.parameters()])}'
         )
     
-    data_config = resolve_data_config(vars(args), model=model, verbose=args.local_rank == 0)
+    data_config = resolve_data_config(vars(args), model=model, verbose=args.rank == 0)
     
     # setup augmentation batch splits for contrastive loss or split bn
     num_aug_splits = 0
@@ -826,7 +826,7 @@ def main():
     if args.distributed and args.sync_bn:
         assert not args.split_bn
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        if args.local_rank == 0:
+        if args.rank == 0:
             _logger.info(
               'converted model to use SynchBatchNorm. WARNING: you may have issues if using '
               'zero initialized BN layers (enabled by default for ResNets) while sync-bn enabled.'
@@ -844,10 +844,10 @@ def main():
     if use_amp == 'native':
         amp_autocast = torch.cuda.amp.autocast
         loss_scaler = NativeScaler()
-        if args.local_rank == 0:
+        if args.rank == 0:
             _logger.info('using native PyTorch AMP. training in mixed precision.')
     else:
-        if args.local_rank == 0:
+        if args.rank == 0:
             _logger.info('AMP is not enabled. training on float32.')
     
     # optionally resume from a checkpoint
@@ -866,11 +866,11 @@ def main():
               args.resume,
               optimizer=None if args.no_resume_opt else optimizer,
               loss_scaler=None if args.no_resume_opt else loss_scaler,
-              log_info=args.local_rank == 0
+              log_info=args.rank == 0
             )
         else:
             print('finetune option is selected, not loading optimizer state and loss_scaler')
-            _ = resume_checkpoint(model, args.resume, optimizer=None, loss_scaler=None, log_info=args.local_rank == 0)
+            _ = resume_checkpoint(model, args.resume, optimizer=None, loss_scaler=None, log_info=args.rank == 0)
             
             data_config['crop_pct'] = 1.
             print(f'data config: {data_config}')
@@ -888,11 +888,11 @@ def main():
     # set distributed training
     if args.distributed:
         # NOTE: EMA model does not need to be wrapped by DDP
-        if args.local_rank == 0:
+        if args.rank == 0:
             _logger.info('using native PyTorch DDP')
         model = NativeDDP(
           model,
-          device_ids=[args.local_rank],
+          device_ids=[args.rank],
           broadcast_buffers=not args.no_ddp_bb,
         )
     
@@ -916,7 +916,7 @@ def main():
           t_max=int(args.epoch * args.imagenet_trainset_size // args.batch_size // args.world_size)
         )
     
-    if args.local_rank == 0:
+    if args.rank == 0:
         _logger.info(f'scheduled epochs: {num_epochs}')
     
     # instantiate teacher model, if distillation is requested
@@ -1111,7 +1111,7 @@ def main():
               logger=_logger,
             )
         if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-            if args.local_rank == 0:
+            if args.rank == 0:
                 _logger.info('distributing BatchNorm running means and vars')
             distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
         
