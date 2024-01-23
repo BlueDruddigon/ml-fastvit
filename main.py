@@ -51,7 +51,7 @@ def _parse_args():
     parser = argparse.ArgumentParser(description='pytorch imagenet training')
     
     # Dataset parameters
-    parser.add_argument('data-dir', metavar='DIR', help='path to dataset')
+    parser.add_argument('data_dir', metavar='DIR', help='path to dataset')
     parser.add_argument(
       '-d', '--dataset', default='', metavar='NAME', help='dataset type. default: ImageFolder/ImageTar if empty'
     )
