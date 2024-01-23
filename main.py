@@ -27,6 +27,7 @@ from timm.utils import (
 )
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
+import models
 from losses.distillation_loss import DistillationLoss
 from trainer import train_one_epoch, validate
 from utils.cosine_annealing import CosineWDSchedule
@@ -706,7 +707,6 @@ def _parse_args():
       metavar='N',
       help='test/inference time augmentation (oversampling) factor. 0=None. default: 0',
     )
-    parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument(
       '--use-multi-epochs-loader',
       action='store_true',
@@ -752,16 +752,14 @@ def main():
     
     if 'WORLD_SIZE' in os.environ:
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
-    args.device = 'cuda:0'
     args.world_size = 1
     args.rank = 0  # global rank
     
     if args.distributed:
-        args.device = f'cuda:{args.local_rank}'
-        torch.cuda.set_device(args.local_rank)
         dist.init_process_group(backend='nccl', init_method='env://')
         args.world_size = dist.get_world_size()
         args.rank = dist.get_rank()
+        torch.cuda.set_device(args.rank)
         _logger.info(
           f'training in distributed mode with multiple processes, 1 GPU per process. '
           f'process: {args.rank}, total {args.world_size}'
