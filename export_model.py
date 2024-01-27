@@ -28,33 +28,27 @@ def export(variant: str, output_dir: str, checkpoint: str = None) -> None:
     
     # random input tensor for tracing purposes.
     inputs = torch.rand(1, 3, 256, 256)
-    inputs_tensor = [
-        coremltools.TensorType(name='images', shape=inputs.shape)
-    ]
-
+    inputs_tensor = [coremltools.TensorType(name='images', shape=inputs.shape)]
+    
     # instantiate model variant.
     model = getattr(models, variant)()
     print(f'export and convert model: {variant}')
-
+    
     # always re-parameterize before exporting
-    reparameterize_model = reparameterize_model(model)
+    reparameterized_model = reparameterize_model(model)
     if checkpoint is not None:
         print(f'load checkpint {checkpoint}')
         ckpt = torch.load(checkpoint)
-        reparameterize_model.load_state_dict(ckpt['state_dict'])
-    reparameterize_model.eval()
-
+        reparameterized_model.load_state_dict(ckpt['state_dict'])
+    reparameterized_model.eval()
+    
     # trace and export
-    traced_model = torch.jit.trace(reparameterize_model, torch.Tensor(inputs))
+    traced_model = torch.jit.trace(reparameterized_model, torch.Tensor(inputs))
     output_path = os.path.join(output_dir, variant)
     pt_name = output_path + '.pt'
     traced_model.save(pt_name)
     ml_model = coremltools.convert(
-        model=pt_name,
-        outputs=None,
-        inputs=inputs_tensor,
-        convert_to='mlprogram',
-        debug=False
+      model=pt_name, outputs=None, inputs=inputs_tensor, convert_to='mlprogram', debug=False
     )
     ml_model.save(output_path + '.mlpackage')
 
@@ -62,3 +56,4 @@ def export(variant: str, output_dir: str, checkpoint: str = None) -> None:
 if __name__ == '__main__':
     args = _parse_args()
     export(args.variant, args.output_dir, args.checkpoint)
+
