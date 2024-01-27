@@ -36,7 +36,7 @@ default_cfgs = {
 }
 
 
-class PatchEmbed(nn.Module):
+class PatchEmbed(nn.Sequential):
     def __init__(
       self, in_channels: int, embed_dim: int, patch_size: int, stride: int, inference_mode: bool = False
     ) -> None:
@@ -48,8 +48,7 @@ class PatchEmbed(nn.Module):
         :param stride: stride for convolution embedding layer
         :param inference_mode: whether to initialize module in inference mode. Default: False
         """
-        super().__init__()
-        blocks = nn.ModuleList([
+        super().__init__(
           ReparamLargeKernelConv(
             in_channels=in_channels,
             out_channels=embed_dim,
@@ -70,11 +69,7 @@ class PatchEmbed(nn.Module):
             use_se=False,
             num_conv_branches=1
           )
-        ])
-        self.proj = nn.Sequential(*blocks)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.proj(x)
+        )
 
 
 class ConvStem(nn.Sequential):
@@ -255,12 +250,11 @@ class ConvFFN(nn.Sequential):
         :param act_layer: activation layer. Default: nn.GELU
         :param dropout_rate: dropout rate. Default: 0.
         """
-        super().__init__()
         hidden_channels = hidden_channels or in_channels
         out_channels = out_channels or in_channels
         
         dropout = nn.Dropout(p=dropout_rate)
-        self.layers = nn.Sequential(
+        super().__init__(
           nn.Conv2d(in_channels, out_channels, kernel_size=7, stride=1, padding=3, groups=in_channels, bias=False),
           nn.BatchNorm2d(out_channels),
           nn.Conv2d(in_channels, hidden_channels, kernel_size=1),
