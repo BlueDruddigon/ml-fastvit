@@ -78,20 +78,6 @@ def _parse_args():
       '--val-split', metavar='NAME', default='validation', help='Dataset validation split. default: validation'
     )
     parser.add_argument(
-      '--train-num-samples',
-      default=None,
-      type=int,
-      metavar='N',
-      help='Manually specify num samples in train split, for IterableDatasets.'
-    )
-    parser.add_argument(
-      '--val-num-samples',
-      default=None,
-      type=int,
-      metavar='N',
-      help='Manually specify num samples in validation split, for IterableDatasets.'
-    )
-    parser.add_argument(
       '--dataset-download',
       action='store_true',
       default=False,
@@ -100,11 +86,6 @@ def _parse_args():
     parser.add_argument(
       '--class-map', default='', type=str, metavar='FILENAME', help='Path to class to idx mapping file. default: ""'
     )
-    parser.add_argument(
-      '--input-img-mode', type=str, default=None, help='Dataset image conversion mode for input images.'
-    )
-    parser.add_argument('--input-key', default=None, type=str, help='Dataset key for input images.')
-    parser.add_argument('--target-key', default=None, type=str, help='Dataset key for target labels.')
     
     # model parameters
     parser.add_argument(
@@ -1009,11 +990,6 @@ def main():
         teacher_model.eval()
     
     # create the train and eval datasets
-    if args.input_img_mode is None:
-        input_img_mode = 'RGB' if data_config['input_size'][0] == 3 else 'L'
-    else:
-        input_img_mode = args.input_img_mode
-    
     train_dataset = create_dataset(
       args.dataset,
       root=args.data_dir,
@@ -1023,11 +999,7 @@ def main():
       download=args.dataset_download,
       batch_size=args.batch_size,
       seed=args.seed,
-      repeats=args.epoch_repeats,
-      input_img_mode=input_img_mode,
-      input_key=args.input_key,
-      target_key=args.target_key,
-      num_samples=args.train_num_samples
+      repeats=args.epoch_repeats
     )
     eval_dataset = create_dataset(
       args.dataset,
@@ -1036,11 +1008,7 @@ def main():
       is_training=False,
       class_map=args.class_map,
       download=args.dataset_download,
-      batch_size=args.batch_size,
-      input_img_mode=input_img_mode,
-      input_key=args.input_key,
-      target_key=args.target_key,
-      num_samples=args.val_num_samples
+      batch_size=args.batch_size
     )
     
     # setup mixup/cutmix
