@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.layers import DropPath, to_ntuple, trunc_normal_
-from timm.models import register_model
+from timm.models import checkpoint_seq, register_model
 
 from .components import Attention, MobileOneBlock, ReparamLargeKernelConv
 
@@ -377,7 +377,7 @@ class AttentionBlock(nn.Module):
         return x
 
 
-class BasicBlock(nn.Sequential):
+class BasicBlock(nn.Module):
     mixer_types = ['repmixer', 'attention']
     
     def __init__(
@@ -420,52 +420,68 @@ class BasicBlock(nn.Sequential):
         :param layer_scale_init_value: layer scale value at initialization. Default: 1e-5
         :param inference_mode: flag to instantiate block in inference mode. Default: False
         """
-        layers = nn.ModuleList()
+        super().__init__()
+        self.grad_checkpointing = False
         
         if downsample:
-            layers.append(
-              PatchEmbed(
-                in_channels=dim,
-                embed_dim=dim_out,
-                patch_size=down_patch_size,
-                stride=down_stride,
-                inference_mode=inference_mode
-              )
+            self.downsample = PatchEmbed(
+              in_channels=dim,
+              embed_dim=dim_out,
+              patch_size=down_patch_size,
+              stride=down_stride,
+              inference_mode=inference_mode
             )
+        else:
+            assert dim == dim_out
+            self.downsample = nn.Identity()
         
         if pos_embed_layer is not None:
-            layers.append(pos_embed_layer(dim_out, inference_mode=inference_mode))
+            self.pos_embed = pos_embed_layer(dim_out, inference_mode=inference_mode)
+        else:
+            self.pos_embed = nn.Identity()
         
+        blocks = nn.ModuleList()
         for i in range(depth):
             if mixer_type == 'repmixer':
-                mixer_block = RepMixerBlock(
-                  dim_out,
-                  kernel_size=kernel_size,
-                  mlp_ratio=mlp_ratio,
-                  act_layer=act_layer,
-                  dropout_rate=dropout_rate,
-                  drop_path_rate=drop_path[i],
-                  use_layer_scale=use_layer_scale,
-                  layer_scale_init_value=layer_scale_init_value,
-                  inference_mode=inference_mode
+                blocks.append(
+                  RepMixerBlock(
+                    dim_out,
+                    kernel_size=kernel_size,
+                    mlp_ratio=mlp_ratio,
+                    act_layer=act_layer,
+                    dropout_rate=dropout_rate,
+                    drop_path_rate=drop_path[i],
+                    use_layer_scale=use_layer_scale,
+                    layer_scale_init_value=layer_scale_init_value,
+                    inference_mode=inference_mode
+                  )
                 )
             elif mixer_type == 'attention':
-                mixer_block = AttentionBlock(
-                  dim_out,
-                  mlp_ratio=mlp_ratio,
-                  act_layer=act_layer,
-                  norm_layer=norm_layer,
-                  dropout_rate=dropout_rate,
-                  drop_path_rate=drop_path[i],
-                  use_layer_scale=use_layer_scale,
-                  layer_scale_init_value=layer_scale_init_value
+                blocks.append(
+                  AttentionBlock(
+                    dim_out,
+                    mlp_ratio=mlp_ratio,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    dropout_rate=dropout_rate,
+                    drop_path_rate=drop_path[i],
+                    use_layer_scale=use_layer_scale,
+                    layer_scale_init_value=layer_scale_init_value
+                  )
                 )
             else:
                 raise NotImplementedError
-            
-            layers.append(mixer_block)
         
-        super().__init__(*layers)
+        self.blocks = nn.Sequential(*blocks)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.downsample(x)
+        x = self.pos_embed(x)
+        if self.grad_checkpointing and not torch.jit.is_scripting():
+            x = checkpoint_seq(self.blocks, x)
+        else:
+            x = self.blocks(x)
+        return x
 
 
 class FastViT(nn.Module):
@@ -489,7 +505,8 @@ class FastViT(nn.Module):
       use_layer_scale: bool = True,
       layer_scale_init_value: float = 1e-5,
       fork_feat: bool = False,
-      pretrained: str = '',
+      pretrained: bool = False,
+      pretrained_path: str = '',
       cls_ratio: int = 2.,
       inference_mode: bool = False,
       **kwargs: Any
@@ -514,7 +531,8 @@ class FastViT(nn.Module):
         :param use_layer_scale: flag to turn on layer scale regularization. Default: True
         :param layer_scale_init_value: layer scale value at initialization. Default: 1e-5
         :param fork_feat: flag to use model for dense prediction tasks. Default: False
-        :param pretrained: path to the pre-trained checkpoint. Default: ''
+        :param pretrained: flag to use pre-trained checkpoint. Default: False
+        :param pretrained_path: path to pre-trained weights. Default: ''
         :param cls_ratio: classification ratio for last feature extraction. Default: 2.
         :param inference_mode: flag to instantiate model in inference mode. Default: False
         """
@@ -595,7 +613,7 @@ class FastViT(nn.Module):
         
         # load pre-trained checkpoint
         if self.fork_feat and self.pretrained:
-            self.init_weights()
+            self.init_weights(pretrained_path)
     
     def cls_init_weights(self, m: nn.Module) -> None:
         """method for classifier head's weight initialization
@@ -621,11 +639,16 @@ class FastViT(nn.Module):
                 sterile_dict[k] = v
         return sterile_dict
     
-    def init_weights(self) -> None:
+    def init_weights(self, path: str) -> None:
         """ method to load model checkpoint if `self.fork_feat` and `self.pretrained` are provided """
-        ckpt = torch.load(self.pretrained, map_location='cpu')
+        ckpt = torch.load(path, map_location='cpu')
         state_dict = self._scrub_checkpoint(ckpt['state_dict'])
         self.load_state_dict(state_dict)
+    
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable: bool = True) -> None:
+        for s in self.backbone:
+            s.grad_checkpointing = enable
     
     def forward_embeddings(self, x: torch.Tensor) -> torch.Tensor:
         """method to extract the input image into patches
@@ -677,7 +700,7 @@ class FastViT(nn.Module):
 
 
 @register_model
-def fastvit_t8(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_t8(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T8 model variant."""
     depths = [2, 2, 4, 2]
     embed_dims = [48, 96, 192, 384]
@@ -697,7 +720,7 @@ def fastvit_t8(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_t12(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_t12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
@@ -717,7 +740,7 @@ def fastvit_t12(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_s12(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_s12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-S12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
@@ -737,7 +760,7 @@ def fastvit_s12(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_sa12(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_sa12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
@@ -759,7 +782,7 @@ def fastvit_sa12(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_sa24(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_sa24(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA24 model variant."""
     depths = [4, 4, 12, 4]
     embed_dims = [64, 128, 256, 512]
@@ -781,7 +804,7 @@ def fastvit_sa24(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_sa36(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_sa36(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA36 model variant."""
     depths = [6, 6, 18, 6]
     embed_dims = [64, 128, 256, 512]
@@ -804,7 +827,7 @@ def fastvit_sa36(pretrained: str = '', **kwargs: Any) -> FastViT:
 
 
 @register_model
-def fastvit_ma36(pretrained: str = '', **kwargs: Any) -> FastViT:
+def fastvit_ma36(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-MA36 model variant."""
     depths = [6, 6, 18, 6]
     embed_dims = [76, 152, 304, 608]
