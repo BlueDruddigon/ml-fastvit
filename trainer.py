@@ -17,6 +17,7 @@ from timm.utils import (
   AverageMeter,
   CheckpointSaver,
   dispatch_clip_grad,
+  is_primary,
   ModelEma,
   ModelEmaV2,
   NativeScaler,
@@ -62,7 +63,7 @@ def train_one_epoch(
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
         if not args.prefetcher:
-            input, target = input.cuda(), target.cuda()
+            input, target = input.to(device=args.device), target.to(device=args.device)
             if mixup_fn is not None:
                 input, target = mixup_fn(input, target)
         
@@ -99,7 +100,9 @@ def train_one_epoch(
         if model_ema is not None:
             model_ema.update(model)
         
-        torch.cuda.synchronize()
+        if args.device.type == 'cuda':
+            torch.cuda.synchronize()
+        
         num_updates += 1
         batch_timer_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
@@ -112,7 +115,7 @@ def train_one_epoch(
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
             
-            if args.rank == 0:
+            if is_primary(args):
                 logger.info(
                   f'Train: {epoch} [{batch_idx:>4d}/{len(loader)} ({100. * batch_idx /last_idx:>3.0f}%)] '
                   f'Loss: {losses_m.val:#.4g} ({losses_m.avg:#.3g}) '
@@ -165,23 +168,23 @@ def validate(
         for batch_idx, (input, target) in enumerate(loader):
             last_batch = batch_idx == last_idx
             if not args.prefetcher:
-                input = input.cuda()
-                target = target.cuda()
+                input = input.to(device=args.device)
+                target = target.to(device=args.device)
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
             
             with amp_autocast():
                 output = model(input)
-            if isinstance(output, (tuple, list)):
-                output = output[0]
-            
-            # augmentation reduction
-            reduce_factor = args.tta
-            if reduce_factor > 1:
-                output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
-                target = target[0:target.size(0):reduce_factor]
-            
-            loss = loss_fn(output, target)
+                if isinstance(output, (tuple, list)):
+                    output = output[0]
+                
+                # augmentation reduction
+                reduce_factor = args.tta
+                if reduce_factor > 1:
+                    output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
+                    target = target[0:target.size(0):reduce_factor]
+                
+                loss = loss_fn(output, target)
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             
             if args.distributed:
@@ -191,7 +194,8 @@ def validate(
             else:
                 reduced_loss = loss.data
             
-            torch.cuda.synchronize()
+            if args.device.type == 'cuda':
+                torch.cuda.synchronize()
             
             losses_m.update(reduced_loss.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
@@ -200,7 +204,7 @@ def validate(
             batch_timer_m.update(time.time() - end)
             end = time.time()
             
-            if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+            if is_primary(args) and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
                 logger.info(
                   f'{log_name}: [{batch_idx:>4d}/{last_idx}] '
