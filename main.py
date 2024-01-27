@@ -834,17 +834,13 @@ def main():
     elif args.input_size is not None:
         in_chans = args.input_size[0]
     
-    factory_kwargs = {}
     if args.pretrained_path:
-        # merge with pretrained_cfg of model, 'file' has priority over 'url' and 'hf_hub'
-        factory_kwargs['pretrained_cfg_overlay'] = dict(
-          file=args.pretrained_path,
-          num_classes=-1,  # force head adaption
-        )
+        args.pretrained = True
     
     model = create_model(
       args.model,
       pretrained=args.pretrained,
+      pretrained_path=args.pretrained_path,
       in_chans=in_chans,
       num_classes=args.num_classes,
       drop_rate=args.drop,
@@ -855,7 +851,6 @@ def main():
       bn_eps=args.bn_eps,
       scriptable=args.torchscript,
       checkpoint_path=args.initial_checkpoint,
-      **factory_kwargs,
     )
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'model must have `num_classes` attribute if not set on config.'
@@ -1037,7 +1032,7 @@ def main():
     eval_dataset = create_dataset(
       args.dataset,
       root=args.data_dir,
-      split=args.valid_split,
+      split=args.val_split,
       is_training=False,
       class_map=args.class_map,
       download=args.dataset_download,
