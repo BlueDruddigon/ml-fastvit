@@ -308,7 +308,7 @@ class ReparamLargeKernelConv(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.inference_mode = inference_mode
-        self.act = activation
+        self.act = activation()
         
         self.kernel_size = kernel_size
         self.small_kernel = small_kernel
