@@ -112,7 +112,7 @@ def train_one_epoch(
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
             
-            if args.local_rank == 0:
+            if args.rank == 0:
                 logger.info(
                   f'Train: {epoch} [{batch_idx:>4d}/{len(loader)} ({100. * batch_idx /last_idx:>3.0f}%)] '
                   f'Loss: {losses_m.val:#.4g} ({losses_m.avg:#.3g}) '
@@ -200,7 +200,7 @@ def validate(
             batch_timer_m.update(time.time() - end)
             end = time.time()
             
-            if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+            if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
                 logger.info(
                   f'{log_name}: [{batch_idx:>4d}/{last_idx}] '
