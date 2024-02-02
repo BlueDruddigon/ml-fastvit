@@ -208,6 +208,12 @@ def _parse_args():
       default=False,
       help='Use channels_last memory layout',
     )
+    parser.add_argument(
+      '--grad-checkpointing',
+      action='store_true',
+      default=False,
+      help='Enable gradient checkpointing through model blocks/stages'
+    )
     
     # scripting / codegen
     parser.add_argument(
@@ -831,6 +837,9 @@ def main():
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'model must have `num_classes` attribute if not set on config.'
         args.num_classes = model.num_classes  # FIXME: handle model default vs config `num_classes` more elegantly
+    
+    if args.grad_checkpointing:
+        model.set_grad_checkpointing(enabled=True)
     
     if is_primary(args):
         _logger.info(

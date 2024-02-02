@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.layers import DropPath, trunc_normal_
-from timm.models import register_model
+from timm.models import checkpoint_seq, register_model
 
 from .components import Attention, MobileOneBlock, ReparamLargeKernelConv
 
@@ -374,7 +374,7 @@ class AttentionBlock(nn.Module):
         return x
 
 
-class BasicBlock(nn.Sequential):
+class BasicBlock(nn.Module):
     mixer_types = ['repmixer', 'attention']
     
     def __init__(
@@ -417,26 +417,31 @@ class BasicBlock(nn.Sequential):
         :param layer_scale_init_value: layer scale value at initialization. Default: 1e-5
         :param inference_mode: flag to instantiate block in inference mode. Default: False
         """
+        super().__init__()
+        self.grad_checkpointing = False
         assert mixer_type in self.mixer_types
-        layers = nn.ModuleList()
         
         if downsample:
-            layers.append(
-              PatchEmbed(
-                in_channels=dim,
-                embed_dim=dim_out,
-                patch_size=down_patch_size,
-                stride=down_stride,
-                inference_mode=inference_mode
-              )
+            self.downsample = PatchEmbed(
+              in_channels=dim,
+              embed_dim=dim_out,
+              patch_size=down_patch_size,
+              stride=down_stride,
+              inference_mode=inference_mode
             )
+        else:
+            assert dim == dim_out
+            self.downsample = nn.Identity()
         
         if pos_embed_layer is not None:
-            layers.append(pos_embed_layer(dim_out, inference_mode=inference_mode))
+            self.pos_embed = pos_embed_layer(dim_out, inference_mode=inference_mode)
+        else:
+            self.pos_embed = nn.Identity()
         
+        blocks = nn.ModuleList()
         for i in range(depth):
             if mixer_type == 'repmixer':
-                layers.append(
+                blocks.append(
                   RepMixerBlock(
                     dim_out,
                     kernel_size=kernel_size,
@@ -450,7 +455,7 @@ class BasicBlock(nn.Sequential):
                   )
                 )
             elif mixer_type == 'attention':
-                layers.append(
+                blocks.append(
                   AttentionBlock(
                     dim_out,
                     mlp_ratio=mlp_ratio,
@@ -465,7 +470,16 @@ class BasicBlock(nn.Sequential):
             else:
                 raise NotImplementedError
         
-        super().__init__(*layers)
+        self.blocks = nn.Sequential(*blocks)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.downsample(x)
+        x = self.pos_embed(x)
+        if self.grad_checkpointing and not torch.jit.is_scripting():
+            x = checkpoint_seq(self.blocks, x)  # type: ignore
+        else:
+            x = self.blocks(x)
+        return x
 
 
 class FastViT(nn.Module):
@@ -625,6 +639,11 @@ class FastViT(nn.Module):
         ckpt = torch.load(path, map_location='cpu')
         state_dict = self._scrub_checkpoint(ckpt['state_dict'])
         self.load_state_dict(state_dict)
+    
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enabled: bool = True) -> None:
+        for s in self.backbone:
+            s.grad_checkpointing = enabled
     
     def forward_embeddings(self, x: torch.Tensor) -> torch.Tensor:
         """method to extract the input image into patches
