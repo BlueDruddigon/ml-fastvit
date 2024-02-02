@@ -1,7 +1,8 @@
 import argparse
 import os
+from typing import Optional
 
-import coremltools
+import coremltools # pyright: ignore [reportMissingImports]
 import torch
 
 import models
@@ -16,7 +17,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def export(variant: str, output_dir: str, checkpoint: str = None) -> None:
+def export(variant: str, output_dir: str, checkpoint: Optional[str] = None) -> None:
     """method to export coreml package for mobile inference.
 
     :param variant: FastViT model variant.
@@ -56,4 +57,3 @@ def export(variant: str, output_dir: str, checkpoint: str = None) -> None:
 if __name__ == '__main__':
     args = _parse_args()
     export(args.variant, args.output_dir, args.checkpoint)
-
