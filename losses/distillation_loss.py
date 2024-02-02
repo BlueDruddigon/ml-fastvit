@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,7 +9,7 @@ class DistillationLoss(nn.Module):
     def __init__(
       self,
       base_criterion: nn.Module,
-      teacher: nn.Module,
+      teacher: Optional[nn.Module],
       distillation_type: str,
       alpha: float,
       tau: float,
@@ -26,6 +28,7 @@ class DistillationLoss(nn.Module):
             return base_loss
         
         # we don't backprop through the teacher
+        assert self.teacher is not None
         with torch.no_grad():
             teacher_outputs = self.teacher(inputs)
         
