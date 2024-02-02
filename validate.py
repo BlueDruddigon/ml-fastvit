@@ -17,6 +17,7 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 from functools import partial
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -538,20 +539,20 @@ def main():
     print(f'--result\n{json.dumps(results, indent=4)}')
 
 
-def write_results(results_file: str, results: list or tuple, format: str = 'csv') -> None:
-  with open(results_file, 'w') as cf:
-    if format == 'json':
-      json.dump(results, cf, indent=4)
-    else:
-      if not isinstance(results, (list, tuple)):
-        results = [results]
-      if not results:
-        return
-      dw = csv.DictWriter(cf, fieldnames=results[0].keys())
-      dw.writeheader()
-      for r in results:
-        dw.writerow(r)
-      cf.flush()
+def write_results(results_file: str, results: Union[list, tuple], format: str = 'csv') -> None:
+    with open(results_file, 'w') as cf:
+        if format == 'json':
+            json.dump(results, cf, indent=4)
+        else:
+            if not isinstance(results, (list, tuple)):
+                results = [results]
+            if not results:
+                return
+            dw = csv.DictWriter(cf, fieldnames=results[0].keys())
+            dw.writeheader()
+            for r in results:
+                dw.writerow(r)
+            cf.flush()
 
 
 if __name__ == '__main__':
