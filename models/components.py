@@ -1,5 +1,5 @@
 import copy
-from typing import Tuple, Union
+from typing import Callable, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -50,7 +50,7 @@ class MobileOneBlock(nn.Module):
       use_act: bool = True,
       use_scale_branch: bool = True,
       num_conv_branches: int = 1,
-      activation: nn.Module = nn.GELU,
+      activation: Callable[..., nn.Module] = nn.GELU,
     ):
         """MobileOne building block
         This block has a multi-branched architecture at train-time
@@ -207,13 +207,14 @@ class MobileOneBlock(nn.Module):
         bias_conv = 0
         if self.rbr_conv is not None:
             for rc in self.rbr_conv:
+                assert type(rc) == nn.Sequential
                 _kernel, _bias = self._fuse_bn_tensor(rc)
                 kernel_conv = kernel_conv + _kernel
                 bias_conv = bias_conv + _bias
         
         kernel_final = kernel_conv + kernel_scale + kernel_identity
         bias_final = bias_conv + bias_scale + bias_identity
-        return kernel_final, bias_final
+        return torch.tensor(kernel_final), torch.tensor(bias_final)
     
     def _fuse_bn_tensor(self, branch: Union[nn.Sequential, nn.BatchNorm2d]) -> Tuple[torch.Tensor, torch.Tensor]:
         """method to fuse batchnorm layer with preceeding conv layer.
@@ -287,7 +288,7 @@ class ReparamLargeKernelConv(nn.Module):
       groups: int,
       small_kernel: int,
       inference_mode: bool = False,
-      activation: nn.Module = nn.GELU
+      activation: Callable[..., nn.Module] = nn.GELU
     ) -> None:
         """Building block of RepLKNet.
         This class defines over-parameterized large kernel conv block,
@@ -387,7 +388,7 @@ class ReparamLargeKernelConv(nn.Module):
         return eq_k, eq_b
     
     @staticmethod
-    def _fuse_bn(conv: torch.Tensor, bn: nn.BatchNorm2d) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _fuse_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d) -> Tuple[torch.Tensor, torch.Tensor]:
         """method to fuse batchnorm layer with conv layer
 
         :param conv: convolution kernel weights
@@ -461,17 +462,19 @@ class Attention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, N, C = x.shape
+        B, C, H, W = x.shape
+        N = H * W
+        x = torch.flatten(x, start_dim=2).transpose(-2, -1) # B, N, C
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         
-        q, k, v = qkv[0].float(), qkv[1].float(), qkv[2].float()
-        attn = (q @ k.transpose(-1, -2)) * self.scale
+        q, k, v = qkv[0].float(), qkv[1].float(), qkv[2].float()  # make torchscript happy
+        attn = (q * self.scale) @ k.transpose(-2, -1)  # tricky here to make q@k.T more stable
         attn = self.attn_drop(self.softmax(attn))
         
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj_drop(self.proj(x))
-        return x
+        return x.transpose(-2, -1).reshape(B, C, H, W)
 
 
 def reparameterize_model(model: nn.Module) -> nn.Module:
