@@ -20,10 +20,10 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-from timm.data import create_dataset, create_loader, RealLabelsImagenet, resolve_data_config
+from timm.data import RealLabelsImagenet, create_dataset, create_loader, resolve_data_config
 from timm.layers import apply_test_time_pool
 from timm.models import create_model, is_model, list_models, load_checkpoint
-from timm.utils import accuracy, AverageMeter, natural_key, set_jit_legacy, setup_default_logging
+from timm.utils import AverageMeter, accuracy, natural_key, set_jit_legacy, setup_default_logging
 from torch.nn.parallel import DataParallel as DP
 
 import models
@@ -336,7 +336,7 @@ def validate(args):
     
     model = model.to(device=device)
     if args.channels_last:
-        model = model.to(memory_format=torch.channels_last)
+        model = model.to(memory_format=torch.channels_last)  # pyright: ignore [reportCallIssue]
     
     if args.num_gpu > 1:
         model = DP(model, device_ids=list(range(args.num_gpu)))
@@ -384,7 +384,6 @@ def validate(args):
       num_workers=args.workers,
       crop_pct=crop_pct,
       crop_mode=data_config['crop_mode'],
-      crop_border_pixels=args.crop_border_pixels,
       pin_memory=args.pin_mem,
       device=device,
       tf_preprocessing=args.tf_preprocessing,
@@ -444,9 +443,11 @@ def validate(args):
     
     if real_labels is not None:
         # real labels mode replaces topk values at the end
-        top1a, top5a = real_labels.get_accuracy(k=1), real_labels.get_accuracy(k=5)
+        top1a, top5a = real_labels.get_accuracy(k=1), real_labels.get_accuracy(k=5)  # type: ignore
     else:
-        top1a, top5a = top1.avg, top5.avg
+        top1a: float = top1.avg
+        top5a: float = top5.avg
+    
     results = OrderedDict(
       top1=round(top1a, 4),
       top1_err=round(100 - top1a, 4),
@@ -537,22 +538,21 @@ def main():
     print(f'--result\n{json.dumps(results, indent=4)}')
 
 
-def write_results(results_file: str, results: dict, format: str = 'csv') -> None:
-    with open(results_file, 'w') as cf:
-        if format == 'json':
-            json.dump(results, cf, indent=4)
-        else:
-            if not isinstance(results, (list, tuple)):
-                results = [results]
-            if not results:
-                return
-            dw = csv.DictWriter(cf, fieldnames=results[0].keys())
-            dw.writeheader()
-            for r in results:
-                dw.writerow(r)
-            cf.flush()
+def write_results(results_file: str, results: list or tuple, format: str = 'csv') -> None:
+  with open(results_file, 'w') as cf:
+    if format == 'json':
+      json.dump(results, cf, indent=4)
+    else:
+      if not isinstance(results, (list, tuple)):
+        results = [results]
+      if not results:
+        return
+      dw = csv.DictWriter(cf, fieldnames=results[0].keys())
+      dw.writeheader()
+      for r in results:
+        dw.writerow(r)
+      cf.flush()
 
 
 if __name__ == '__main__':
     main()
-
