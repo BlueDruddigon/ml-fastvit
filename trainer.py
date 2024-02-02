@@ -8,39 +8,43 @@ from typing import Optional, OrderedDict, Union
 import torch
 import torch.nn as nn
 import torchvision
+from timm.data import Mixup
 from timm.data.loader import PrefetchLoader
 from timm.models import model_parameters
 from timm.scheduler.scheduler import Scheduler
 from timm.utils import (
-  accuracy,
   ApexScaler,
   AverageMeter,
   CheckpointSaver,
-  dispatch_clip_grad,
-  is_primary,
   ModelEma,
   ModelEmaV2,
   NativeScaler,
+  accuracy,
+  dispatch_clip_grad,
+  is_primary,
   reduce_tensor,
 )
 from torch.optim import Optimizer
+from torch.utils.data import DataLoader
+
+from utils.cosine_annealing import CosineWDSchedule
 
 
 def train_one_epoch(
   epoch: int,
-  model: nn.Module,
-  loader: PrefetchLoader,
+  model: callable,
+  loader: Union[PrefetchLoader, DataLoader],
   optimizer: Optimizer,
   loss_fn: nn.Module,
   args: Namespace,
   lr_scheduler: Optional[Scheduler] = None,
   saver: Optional[CheckpointSaver] = None,
   output_dir: Optional[str] = None,
-  amp_autocast: Union[suppress, torch.cuda.amp.autocast] = suppress,
+  amp_autocast: Optional[torch.cuda.amp.autocast] = None,
   loss_scaler: Optional[Union[ApexScaler, NativeScaler]] = None,
   model_ema: Optional[Union[ModelEma, ModelEmaV2]] = None,
-  mixup_fn: Optional[None] = None,
-  wd_scheduler: Optional[None] = None,
+  mixup_fn: Optional[Mixup] = None,
+  wd_scheduler: Optional[CosineWDSchedule] = None,
   logger: Optional[logging.Logger] = None
 ) -> OrderedDict[str, float]:
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
@@ -53,6 +57,10 @@ def train_one_epoch(
     batch_timer_m = AverageMeter()
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
+    
+    if amp_autocast is None:
+        # do nothing
+        amp_autocast = suppress  # pyright: ignore [reportAssignmentType]
     
     model.train()
     
@@ -70,7 +78,7 @@ def train_one_epoch(
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
         
-        with amp_autocast():
+        with amp_autocast():  # type: ignore
             output = model(input)
             loss = loss_fn(input, output, target)
         
@@ -147,11 +155,11 @@ def train_one_epoch(
 
 
 def validate(
-  model: nn.Module,
-  loader: PrefetchLoader,
+  model: callable,
+  loader: Union[PrefetchLoader, DataLoader],
   loss_fn: nn.Module,
   args: Namespace,
-  amp_autocast: Union[suppress, torch.cuda.amp.autocast] = suppress,
+  amp_autocast: Optional[torch.cuda.amp.autocast] = None,
   log_suffix: str = '',
   logger: Optional[logging.Logger] = None
 ) -> OrderedDict[str, float]:
@@ -159,6 +167,10 @@ def validate(
     losses_m = AverageMeter()
     top1_m = AverageMeter()
     top5_m = AverageMeter()
+    
+    if amp_autocast is None:
+        # do nothing
+        amp_autocast = suppress  # pyright: ignore [reportAssignmentType]
     
     model.eval()
     
@@ -173,7 +185,7 @@ def validate(
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
             
-            with amp_autocast():
+            with amp_autocast():  # type: ignore
                 output = model(input)
                 if isinstance(output, (tuple, list)):
                     output = output[0]
