@@ -1,0 +1,84 @@
+[tool.pyright]
+exclude = [
+  "**/node_modules",
+  "**/__pycache__"
+]
+
+# Assume Python 3.9
+pythonVersion = "3.9"
+pythonPlatform = "Linux"
+
+typeCheckingMode = "basic"
+useLibraryCodeForTypes = true
+
+# diagnosticSeverityOverrides
+reportGeneralTypeIssues = false
+reportPrivateImportUsage = false
+reportOptionalIterable = false
+reportOptionalMemberAccess = false
+reportUnboundVariable = false
+reportUnusedImport = false
+reportUnknownMemberType = false
+reportAttributeAccessIssue = false
+reportArgumentType = false
+
+[tool.ruff]
+extend-exclude = [
+  "env",
+  ".env"
+]
+
+line-length = 120
+ignore-init-module-imports = true
+
+# Assume Python 3.9
+target-version = "py39"
+
+[tool.ruff.lint]
+extend-ignore = [
+  "E201",
+  "E202",
+  "E226",
+  "E228",
+  "E731",
+  "E741",
+  "W293",
+  "F401",
+  "F403"
+]
+
+[tool.ruff.lint.flake8-unused-arguments]
+ignore-variadic-names = true
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+from-first = true
+
+[tool.ruff.format]
+quote-style = "single"
+# Enable reformatting of code snippets in docstrings.
+docstring-code-format = true
+# Use tabs instead of 4 space indentation.
+indent-style = "tab"
+
+[tool.isort]
+profile = "hug"
+py_version = 39
+line_length = 120
+
+[tool.yapf]
+based_on_style = "facebook"
+allow_multiline_lambdas = true
+arithmetic_precedence_indication = true
+blank_lines_around_top_level_definition = 2
+coalesce_brackets = true
+column_limit = 120
+continuation_indent_width = 2
+dedent_closing_brackets = true
+indent_width = 4
+indent_blank_lines = true
+join_multiple_lines = true
+spaces_around_power_operator = true
+spaces_around_dict_delimiters = false
+spaces_before_comment = 2
+split_complex_comprehension = true
