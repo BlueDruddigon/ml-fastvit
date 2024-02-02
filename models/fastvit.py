@@ -1,13 +1,13 @@
 import os
 import warnings
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from timm.layers import DropPath, to_ntuple, trunc_normal_
-from timm.models import checkpoint_seq, register_model
+from timm.layers import DropPath, trunc_normal_
+from timm.models import register_model
 
 from .components import Attention, MobileOneBlock, ReparamLargeKernelConv
 
@@ -20,7 +20,7 @@ def _cfg(url: str = '', **kwargs: Any) -> Dict[str, Any]:
       'num_classes': 1000,
       'input_size': (3, 256, 256),
       'pool_size': None,
-      'crop_pct': 0.95,
+      'crop_pct': 0.9,
       'interpolation': 'bicubic',
       'mean': IMAGENET_DEFAULT_MEAN,
       'std': IMAGENET_DEFAULT_STD,
@@ -30,8 +30,8 @@ def _cfg(url: str = '', **kwargs: Any) -> Dict[str, Any]:
 
 
 default_cfgs = {
-  'fastvit_t': _cfg(crop_pct=0.9),
-  'fastvit_s': _cfg(crop_pct=0.9),
+  'fastvit_t': _cfg(),
+  'fastvit_s': _cfg(),
   'fastvit_m': _cfg(crop_pct=0.95),
 }
 
@@ -128,7 +128,7 @@ class RepMixer(nn.Module):
         
         if inference_mode:
             self.reparam_conv = nn.Conv2d(
-              dim, dim, kernel_size, stride=1, paddding=kernel_size // 2, groups=dim, bias=True
+              dim, dim, kernel_size, stride=1, padding=kernel_size // 2, groups=dim, bias=True
             )
         else:
             self.norm = MobileOneBlock(
@@ -163,9 +163,7 @@ class RepMixer(nn.Module):
 
 
 class RepCPE(nn.Module):
-    def __init__(
-      self, dim: int, spatial_dim: Union[int, Tuple[int, int]] = (7, 7), inference_mode: bool = False
-    ) -> None:
+    def __init__(self, dim: int, spatial_dim: Tuple[int, int] = (7, 7), inference_mode: bool = False) -> None:
         """Conditional Positional Encoding with Re-parameterizable supports
 
         :param dim: number of embedding dimensions.
@@ -175,8 +173,6 @@ class RepCPE(nn.Module):
         super().__init__()
         self.dim = dim
         self.inference_mode = inference_mode
-        if isinstance(spatial_dim, int):
-            spatial_dim = to_ntuple(2)(spatial_dim)
         self.spatial_dim = spatial_dim
         
         # Depth-wise convolution
@@ -223,8 +219,9 @@ class RepCPE(nn.Module):
           groups=self.dim,
           bias=True
         )
-        self.reparam_conv.weight.data = w_final
-        self.reparam_conv.bias.data = b_final
+        
+        self.reparam_conv.weight.data = torch.tensor(w_final)
+        self.reparam_conv.bias.data = torch.tensor(b_final)
         
         for param in self.parameters():
             param.detach_()
@@ -239,7 +236,7 @@ class ConvFFN(nn.Sequential):
       in_channels: int,
       hidden_channels: Optional[int] = None,
       out_channels: Optional[int] = None,
-      act_layer: nn.Module = nn.GELU,
+      act_layer: Callable[..., nn.Module] = nn.GELU,
       dropout_rate: float = 0.
     ) -> None:
         """Convolutional FFN module.
@@ -271,7 +268,7 @@ class RepMixerBlock(nn.Module):
       dim: int,
       kernel_size: int,
       mlp_ratio: float = 4.,
-      act_layer: nn.Module = nn.GELU,
+      act_layer: Callable[..., nn.Module] = nn.GELU,
       dropout_rate: float = 0.,
       drop_path_rate: float = 0.,
       use_layer_scale: bool = True,
@@ -328,8 +325,8 @@ class AttentionBlock(nn.Module):
       self,
       dim: int,
       mlp_ratio: float = 4.,
-      act_layer: nn.Module = nn.GELU,
-      norm_layer: nn.Module = nn.BatchNorm2d,
+      act_layer: Callable[..., nn.Module] = nn.GELU,
+      norm_layer: Callable[..., nn.Module] = nn.BatchNorm2d,
       dropout_rate: float = 0.,
       drop_path_rate: float = 0.,
       use_layer_scale: bool = True,
@@ -377,7 +374,7 @@ class AttentionBlock(nn.Module):
         return x
 
 
-class BasicBlock(nn.Module):
+class BasicBlock(nn.Sequential):
     mixer_types = ['repmixer', 'attention']
     
     def __init__(
@@ -385,17 +382,17 @@ class BasicBlock(nn.Module):
       dim: int,
       dim_out: int,
       depth: int,
-      mixer_type: mixer_types = 'repmixer',
+      mixer_type: str = 'repmixer',
       downsample: bool = True,
       down_patch_size: int = 7,
       down_stride: int = 2,
       pos_embed_layer: Optional[nn.Module] = None,
       kernel_size: int = 3,
       mlp_ratio: float = 4.,
-      act_layer: nn.Module = nn.GELU,
-      norm_layer: nn.Module = nn.BatchNorm2d,
+      act_layer: Callable[..., nn.Module] = nn.GELU,
+      norm_layer: Callable[..., nn.Module] = nn.BatchNorm2d,
       dropout_rate: float = 0.,
-      drop_path: float = 0.1,
+      drop_path: Union[float, Tuple[float, ...]] = 0.1,
       use_layer_scale: bool = True,
       layer_scale_init_value: float = 1e-5,
       inference_mode: bool = False,
@@ -420,51 +417,47 @@ class BasicBlock(nn.Module):
         :param layer_scale_init_value: layer scale value at initialization. Default: 1e-5
         :param inference_mode: flag to instantiate block in inference mode. Default: False
         """
-        super().__init__()
-        self.grad_checkpointing = False
+        assert mixer_type in self.mixer_types
+        layers = nn.ModuleList()
         
         if downsample:
-            self.downsample = PatchEmbed(
-              in_channels=dim,
-              embed_dim=dim_out,
-              patch_size=down_patch_size,
-              stride=down_stride,
-              inference_mode=inference_mode
+            layers.append(
+              PatchEmbed(
+                in_channels=dim,
+                embed_dim=dim_out,
+                patch_size=down_patch_size,
+                stride=down_stride,
+                inference_mode=inference_mode
+              )
             )
-        else:
-            assert dim == dim_out
-            self.downsample = nn.Identity()
         
         if pos_embed_layer is not None:
-            self.pos_embed = pos_embed_layer(dim_out, inference_mode=inference_mode)
-        else:
-            self.pos_embed = nn.Identity()
+            layers.append(pos_embed_layer(dim_out, inference_mode=inference_mode))
         
-        blocks = nn.ModuleList()
         for i in range(depth):
             if mixer_type == 'repmixer':
-                blocks.append(
+                layers.append(
                   RepMixerBlock(
                     dim_out,
                     kernel_size=kernel_size,
                     mlp_ratio=mlp_ratio,
                     act_layer=act_layer,
                     dropout_rate=dropout_rate,
-                    drop_path_rate=drop_path[i],
+                    drop_path_rate=drop_path[i] if isinstance(drop_path, (tuple, list)) else drop_path,
                     use_layer_scale=use_layer_scale,
                     layer_scale_init_value=layer_scale_init_value,
                     inference_mode=inference_mode
                   )
                 )
             elif mixer_type == 'attention':
-                blocks.append(
+                layers.append(
                   AttentionBlock(
                     dim_out,
                     mlp_ratio=mlp_ratio,
                     act_layer=act_layer,
                     norm_layer=norm_layer,
                     dropout_rate=dropout_rate,
-                    drop_path_rate=drop_path[i],
+                    drop_path_rate=drop_path[i] if isinstance(drop_path, (tuple, list)) else drop_path,
                     use_layer_scale=use_layer_scale,
                     layer_scale_init_value=layer_scale_init_value
                   )
@@ -472,32 +465,23 @@ class BasicBlock(nn.Module):
             else:
                 raise NotImplementedError
         
-        self.blocks = nn.Sequential(*blocks)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.downsample(x)
-        x = self.pos_embed(x)
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            x = checkpoint_seq(self.blocks, x)
-        else:
-            x = self.blocks(x)
-        return x
+        super().__init__(*layers)
 
 
 class FastViT(nn.Module):
     def __init__(
       self,
       in_channels: int = 3,
-      depths: List[int] = (2, 2, 6, 2),
-      token_mixers: List[str] = ('repmixer', 'repmixer', 'repmixer', 'repmixer'),
-      embed_dims: List[int] = (64, 128, 256, 512),
-      mlp_ratios: List[float] = (4, ) * 4,
-      downsamples: List[bool] = (False, True, True, True),
+      depths: Union[List[int], Tuple[int, ...]] = (2, 2, 6, 2),
+      token_mixers: Union[List[str], Tuple[str, ...]] = ('repmixer', 'repmixer', 'repmixer', 'repmixer'),
+      embed_dims: Union[List[int], Tuple[int, ...]] = (64, 128, 256, 512),
+      mlp_ratios: Union[List[float], Tuple[float, ...]] = (4, ) * 4,
+      downsamples: Union[List[bool], Tuple[bool, ...]] = (False, True, True, True),
       repmixer_kernel_size: int = 3,
-      norm_layer: nn.Module = nn.BatchNorm2d,
-      act_layer: nn.Module = nn.GELU,
+      norm_layer: Callable[..., nn.Module] = nn.BatchNorm2d,
+      act_layer: Callable[..., nn.Module] = nn.GELU,
       num_classes: int = 1000,
-      pos_embeds: List[Optional[nn.Module]] = None,
+      pos_embeds: Union[List[Optional[nn.Module]], Tuple[Optional[nn.Module], ...]] = (None, None, None, None),
       down_patch_size: int = 7,
       down_stride: int = 2,
       dropout_rate: float = 0.0,
@@ -507,7 +491,7 @@ class FastViT(nn.Module):
       fork_feat: bool = False,
       pretrained: bool = False,
       pretrained_path: str = '',
-      cls_ratio: int = 2.,
+      cls_ratio: float = 2.,
       inference_mode: bool = False,
       **kwargs: Any
     ) -> None:
@@ -542,9 +526,6 @@ class FastViT(nn.Module):
             self.num_classes = num_classes
         self.fork_feat = fork_feat
         self.pretrained = pretrained
-        
-        if pos_embeds is None:
-            pos_embeds = [None] * 4
         
         # convolutional stem
         self.patch_embed = ConvStem(in_channels, embed_dims[0], inference_mode=inference_mode)
@@ -584,7 +565,7 @@ class FastViT(nn.Module):
             # adding post norm layer for each output of BasicBlock
             self.out_indices = [0, 1, 2, 3]
             for embed_idx, layer_idx in enumerate(self.out_indices):
-                if embed_idx == 0 and os.environ.get('FORK_LAST3', None):
+                if embed_idx == 0 and os.environ.get('FORK_LAST3', False):
                     # for RetinaNet, `start_level=1`. the first norm layer will not used.
                     # cmd: `FORK_LAST3=1 python -m torch.distributed.launch ...`
                     layer = nn.Identity()
@@ -645,11 +626,6 @@ class FastViT(nn.Module):
         state_dict = self._scrub_checkpoint(ckpt['state_dict'])
         self.load_state_dict(state_dict)
     
-    @torch.jit.ignore
-    def set_grad_checkpointing(self, enable: bool = True) -> None:
-        for s in self.backbone:
-            s.grad_checkpointing = enable
-    
     def forward_embeddings(self, x: torch.Tensor) -> torch.Tensor:
         """method to extract the input image into patches
 
@@ -688,12 +664,12 @@ class FastViT(nn.Module):
         # patch embedding
         x = self.forward_embeddings(x)
         # backbone forwarding
-        x = self.forward_tokens(x)
+        outputs = self.forward_tokens(x)
         if self.fork_feat:
             # dense prediction task returning
-            return x
+            return outputs
         # image classification task
-        x = self.conv_exp(x)
+        x = self.conv_exp(outputs)
         x = self.gap(x)
         x = x.view(x.size(0), -1)
         return self.head(x)
@@ -704,7 +680,7 @@ def fastvit_t8(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T8 model variant."""
     depths = [2, 2, 4, 2]
     embed_dims = [48, 96, 192, 384]
-    mlp_ratios = [3, 3, 3, 3]
+    mlp_ratios = [3., 3., 3., 3.]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'repmixer']
     model = FastViT(
       in_channels=3,
@@ -724,7 +700,7 @@ def fastvit_t12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-T12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
-    mlp_ratios = [3, 3, 3, 3]
+    mlp_ratios = [3., 3., 3., 3.]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'repmixer']
     model = FastViT(
       in_channels=3,
@@ -744,7 +720,7 @@ def fastvit_s12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-S12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
-    mlp_ratios = [4, 4, 4, 4]
+    mlp_ratios = [4., 4., 4., 4.]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'repmixer']
     model = FastViT(
       in_channels=3,
@@ -764,7 +740,7 @@ def fastvit_sa12(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA12 model variant."""
     depths = [2, 2, 6, 2]
     embed_dims = [64, 128, 256, 512]
-    mlp_ratios = [4, 4, 4, 4]
+    mlp_ratios = [4., 4., 4., 4.]
     pos_embeds = [None, None, None, partial(RepCPE, spatial_dim=(7, 7))]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'attention']
     model = FastViT(
@@ -786,7 +762,7 @@ def fastvit_sa24(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA24 model variant."""
     depths = [4, 4, 12, 4]
     embed_dims = [64, 128, 256, 512]
-    mlp_ratios = [4, 4, 4, 4]
+    mlp_ratios = [4., 4., 4., 4.]
     pos_embeds = [None, None, None, partial(RepCPE, spatial_dim=(7, 7))]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'attention']
     model = FastViT(
@@ -808,7 +784,7 @@ def fastvit_sa36(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-SA36 model variant."""
     depths = [6, 6, 18, 6]
     embed_dims = [64, 128, 256, 512]
-    mlp_ratios = [4, 4, 4, 4]
+    mlp_ratios = [4., 4., 4., 4.]
     pos_embeds = [None, None, None, partial(RepCPE, spatial_dim=(7, 7))]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'attention']
     model = FastViT(
@@ -831,7 +807,7 @@ def fastvit_ma36(pretrained: bool = False, **kwargs: Any) -> FastViT:
     """Instantiate FastViT-MA36 model variant."""
     depths = [6, 6, 18, 6]
     embed_dims = [76, 152, 304, 608]
-    mlp_ratios = [4, 4, 4, 4]
+    mlp_ratios = [4., 4., 4., 4.]
     pos_embeds = [None, None, None, partial(RepCPE, spatial_dim=(7, 7))]
     token_mixers = ['repmixer', 'repmixer', 'repmixer', 'attention']
     model = FastViT(
