@@ -22,11 +22,12 @@ import os
 from contextlib import suppress
 from datetime import datetime
 from functools import partial
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import yaml
-from timm.data import AugMixDataset, create_dataset, create_loader, FastCollateMixup, Mixup, resolve_data_config
+from timm.data import AugMixDataset, FastCollateMixup, Mixup, create_dataset, create_loader, resolve_data_config
 from timm.layers import convert_splitbn_model
 from timm.loss import BinaryCrossEntropy, JsdCrossEntropy, LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.models import create_model, load_checkpoint, resume_checkpoint, safe_model_name
@@ -34,12 +35,12 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import (
   CheckpointSaver,
+  ModelEmaV2,
+  NativeScaler,
   distribute_bn,
   get_outdir,
   init_distributed_device,
   is_primary,
-  ModelEmaV2,
-  NativeScaler,
   random_seed,
   setup_default_logging,
   update_summary,
@@ -206,12 +207,6 @@ def _parse_args():
       action='store_true',
       default=False,
       help='Use channels_last memory layout',
-    )
-    parser.add_argument(
-      '--grad-checkpointing',
-      action='store_true',
-      default=False,
-      help='Enable gradient checkpointing through model blocks/stages'
     )
     
     # scripting / codegen
@@ -837,9 +832,6 @@ def main():
         assert hasattr(model, 'num_classes'), 'model must have `num_classes` attribute if not set on config.'
         args.num_classes = model.num_classes  # FIXME: handle model default vs config `num_classes` more elegantly
     
-    if args.grad_checkpointing:
-        model.set_grad_checkpointing(enable=True)
-    
     if is_primary(args):
         _logger.info(
           f'model {safe_model_name(args.model)} is created, '
@@ -862,7 +854,7 @@ def main():
     # move model to GPU, enable channels last layout if set
     model.to(device=args.device)
     if args.channels_last:
-        model = model.to(memory_format=torch.channels_last)
+        model = model.to(memory_format=torch.channels_last)  # type: ignore
     
     # setup synchronized BatchNorm for distributed training
     if args.distributed and args.sync_bn:
@@ -971,7 +963,7 @@ def main():
         )
     
     # instantiate teacher model, if distillation is requested
-    teacher_model = None
+    teacher_model: Optional[nn.Module] = None
     if args.distillation_type != 'none':
         assert args.teacher_path, 'need to specify teacher-path when using distillation'
         print(f'creating teacher model: {args.teacher_model}')
